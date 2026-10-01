@@ -1,0 +1,35 @@
+# Duas vezes por semana: (1) consulta o Supabase, o que impede a pausa por inatividade;
+# (2) salva uma cópia dos dados em data/pessoas.json, usada pelo grafo se o banco estiver fora do ar.
+name: Manter Supabase ativo e salvar cópia
+
+on:
+  schedule:
+    - cron: '0 12 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  copia:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Buscar dados no Supabase
+        run: |
+          URL=$(grep -oP 'SUPABASE_URL:\s*"\K[^"]+' config.js || true)
+          KEY=$(grep -oP 'SUPABASE_ANON_KEY:\s*"\K[^"]+' config.js || true)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then echo "config.js sem chaves; nada a fazer"; exit 0; fi
+          mkdir -p data
+          curl -fsS "$URL/rest/v1/pessoas?select=*&order=criado_em" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -o data/pessoas.novo.json
+          mv data/pessoas.novo.json data/pessoas.json
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > data/ultima-checagem.txt
+
+      - name: Salvar no repositório
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add data
+          git diff --cached --quiet || (git commit -m "Atualiza cópia dos dados" && git push)
