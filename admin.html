@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · Mapa do Lina</title>
+<link rel="stylesheet" href="brand.css">
+<link rel="stylesheet" href="style.css">
+<script src="brand.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="util.js"></script>
+<script src="db.js"></script>
+</head>
+<body>
+<main class="wide">
+  <div class="top">
+    <div class="brand-header" data-wordmark>
+      <div><p class="name">Laboratório de Modelagem<br>da Informação</p><p class="tagline">Arte · Arquitetura · Ambiente</p></div>
+    </div>
+  </div>
+  <h1>Painel de administração</h1>
+  <p class="sub" id="modo"></p>
+
+  <section id="login" class="card hide" style="max-width:420px">
+    <h2>Entrar</h2>
+    <label>E-mail</label><input id="em" type="email" autocomplete="username">
+    <label>Senha</label><input id="pw" type="password" autocomplete="current-password">
+    <button class="primary" id="entrar">Entrar</button>
+    <div class="msg err" id="lmsg"></div>
+  </section>
+
+  <div id="painel" class="hide">
+    <div class="card row" style="align-items:flex-start;gap:24px">
+      <div>
+        <h2>QR code do formulário</h2>
+        <div id="qr" style="background:#fff;padding:10px;display:inline-block;border-radius:8px"></div>
+        <div class="who" id="url"></div>
+      </div>
+      <div style="flex:1;min-width:240px">
+        <h2>Etapa atual: <span class="pill" id="fase">1</span></h2>
+        <p class="sub"><b>Etapa 1:</b> todos digitam nome, curso e orientador.<br><b>Etapa 2:</b> temas e colaboradores (a lista de nomes já está pronta).</p>
+        <p><span class="big" id="total">0</span> pessoas cadastradas</p>
+        <div class="row">
+          <button id="b1">Voltar à etapa 1</button>
+          <button id="b2" class="primary" style="width:auto;margin:0">Liberar etapa 2</button>
+        </div>
+        <p class="who"><a href="grafo.html" target="_blank">Abrir o grafo (para projetar)</a></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Unir ou renomear temas</h2>
+      <p class="sub">Escolha um tema e digite o nome final. Se já existir outro com esse nome, os dois viram um só.</p>
+      <div class="row">
+        <select id="temaSel" style="flex:1;min-width:200px"></select>
+        <input id="temaNovo" placeholder="Novo nome" style="flex:1;min-width:200px">
+        <button id="renomear">Aplicar</button>
+      </div>
+      <div class="msg" id="tmsg"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><h2>Pessoas</h2>
+        <span class="row"><button id="csv">Exportar CSV</button><button id="json">Exportar JSON</button><button id="logout" class="hide">Sair</button></span></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Nome</th><th>Papel / curso</th><th>Orientador</th><th>Temas</th><th>Colabs.</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
+    </div>
+
+    <div class="card hide" id="demoBox">
+      <h2>Modo demo</h2>
+      <p class="sub">Dados fictícios (50 pessoas) para testar o grafo. Só existe no modo demo.</p>
+      <div class="row"><button id="seed">Gerar dados de teste</button><button id="clear" class="danger">Apagar tudo</button></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let pessoas = [];
+
+async function init() {
+  $('#modo').textContent = DB.demo ? 'MODO DEMO: os dados ficam só neste navegador. Configure o Supabase em config.js para coletar de verdade.' : 'Conectado ao Supabase.';
+  if (await DB.isAdmin()) startPanel(); else $('#login').classList.remove('hide');
+}
+$('#entrar').onclick = async () => {
+  try { await DB.login($('#em').value, $('#pw').value); $('#login').classList.add('hide'); startPanel(); }
+  catch (e) { $('#lmsg').textContent = 'Não foi possível entrar: ' + e.message; }
+};
+$('#logout').onclick = async () => { await DB.logout(); location.reload(); };
+
+function startPanel() {
+  $('#painel').classList.remove('hide');
+  if (DB.demo) $('#demoBox').classList.remove('hide'); else $('#logout').classList.remove('hide');
+  const url = new URL('index.html', location.href).href;
+  $('#url').textContent = url;
+  new QRCode($('#qr'), { text: url, width: 200, height: 200 });
+  DB.onChange(load); load();
+}
+
+async function load() {
+  let fase;
+  [pessoas, fase] = await Promise.all([DB.listPessoas(), DB.getFase()]);
+  $('#fase').textContent = fase; $('#total').textContent = pessoas.length;
+  $('#b1').disabled = fase === 1; $('#b2').disabled = fase === 2;
+  const byId = new Map(pessoas.map(p => [p.id, p]));
+  $('#tb').innerHTML = pessoas.map(p => `<tr>
+    <td>${esc(p.nome)}</td><td>${p.papel === 'professor' ? 'Professor(a)' : esc(p.curso || '')}</td><td>${esc(p.orientador || '')}</td>
+    <td>${esc((p.temas || []).join(', '))}</td><td>${(p.colabs || []).map(id => esc((byId.get(id) || {}).nome || '?')).join(', ')}</td>
+    <td><button class="small danger" data-id="${p.id}">apagar</button></td></tr>`).join('');
+  $('#tb').querySelectorAll('button').forEach(b => b.onclick = async () => {
+    const p = byId.get(b.dataset.id);
+    if (confirm(`Apagar ${p.nome}?`)) { await DB.deletePessoa(p.id); load(); }
+  });
+  const cur = $('#temaSel').value;
+  $('#temaSel').innerHTML = [...themeIndex(pessoas).values()].sort((a, b) => a.label.localeCompare(b.label, 'pt'))
+    .map(t => `<option value="${esc(t.key)}">${esc(t.label)} (${t.count})</option>`).join('');
+  if (cur) $('#temaSel').value = cur;
+}
+
+$('#b1').onclick = async () => { await DB.setFase(1); load(); };
+$('#b2').onclick = async () => { await DB.setFase(2); load(); };
+
+$('#renomear').onclick = async () => {
+  const key = $('#temaSel').value, novo = $('#temaNovo').value.trim().replace(/\s+/g, ' ');
+  if (!key || !novo) return;
+  const alvo = themeIndex(pessoas).get(norm(novo));
+  const label = alvo ? alvo.label : novo;
+  let n = 0;
+  for (const p of pessoas) {
+    if (!(p.temas || []).some(t => norm(t) === key)) continue;
+    const temas = [];
+    p.temas.map(t => norm(t) === key ? label : t).forEach(t => { if (!temas.some(x => norm(x) === norm(t))) temas.push(t); });
+    await DB.savePessoa({ id: p.id, temas }); n++;
+  }
+  $('#temaNovo').value = '';
+  $('#tmsg').className = 'msg ok'; $('#tmsg').textContent = `Tema atualizado em ${n} pessoa(s).`;
+  load();
+};
+
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+}
+$('#json').onclick = () => download('lina-mapa.json', JSON.stringify(pessoas, null, 2), 'application/json');
+$('#csv').onclick = () => {
+  const byId = new Map(pessoas.map(p => [p.id, p]));
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const rows = [['nome', 'papel', 'curso', 'orientador', 'temas', 'colaboradores_em_ordem']].concat(pessoas.map(p =>
+    [p.nome, p.papel, p.curso, p.orientador, (p.temas || []).join('; '), (p.colabs || []).map(id => (byId.get(id) || {}).nome).filter(Boolean).join('; ')]));
+  download('lina-mapa.csv', '﻿' + rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
+};
+
+/* ---------- demo ---------- */
+const EIXOS = [
+  ['Visão computacional', 'Aprendizado profundo', 'Imagens médicas', 'Detecção de objetos'],
+  ['Processamento de linguagem natural', 'Modelos de linguagem', 'Análise de sentimentos', 'Aprendizado profundo'],
+  ['Redes de computadores', 'Internet das coisas', 'Computação em nuvem', 'Segurança'],
+  ['Engenharia de software', 'Testes de software', 'Qualidade de software', 'Computação em nuvem'],
+  ['Mineração de dados', 'Grafos e redes complexas', 'Sistemas de recomendação', 'Análise de sentimentos']
+];
+const NOMES = 'Ana Beatriz Carlos Daniel Elisa Fábio Gabriela Hugo Isabela João Karina Lucas Marina Nuno Olívia Pedro Quitéria Rafael Sofia Tiago Úrsula Vítor Wanda Xavier Yara Zeca Alice Bruno Clara Diego Eva Felipe Gisele Heitor Irene Jonas Laís Mateus Natália Otávio Paula Rodrigo Sara Thales Vera Wagner Yuri Zilda'.split(' ');
+const SOBRE = 'Almeida Barros Costa Dias Esteves Freitas Gomes Holanda Lima Moura Nunes Oliveira Pinto Queiroz Ramos Souza Teixeira Vieira'.split(' ');
+$('#seed').onclick = async () => {
+  const rnd = n => Math.floor(Math.random() * n), pick = a => a[rnd(a.length)];
+  const list = [];
+  const mk = (i, prof, eixo, orient) => ({
+    id: crypto.randomUUID(), criado_em: new Date(Date.now() + i).toISOString(),
+    nome: `${NOMES[i % NOMES.length]} ${SOBRE[(i * 7) % SOBRE.length]}`, papel: prof ? 'professor' : 'aluno',
+    curso: prof ? null : pick(['Graduação', 'Mestrado', 'Doutorado']), orientador: orient || null,
+    temas: [...new Set([pick(EIXOS[eixo]), pick(EIXOS[eixo]), Math.random() < .25 ? pick(pick(EIXOS)) : null].filter(Boolean))], colabs: [], eixo
+  });
+  for (let e = 0; e < 5; e++) list.push(mk(e, true, e));
+  for (let i = 5; i < 50; i++) { const e = rnd(5); list.push(mk(i, false, e, list[e].nome)); }
+  list.forEach(p => {
+    const mesmo = list.filter(q => q.eixo === p.eixo && q.id !== p.id), outros = list.filter(q => q.eixo !== p.eixo);
+    const c = new Set(); for (let k = 0; k < 2 + rnd(3); k++) c.add(pick(Math.random() < .85 ? mesmo : outros).id);
+    p.colabs = [...c];
+  });
+  list.forEach(p => delete p.eixo);
+  await DB.replaceAll(list); load();
+};
+$('#clear').onclick = async () => { if (confirm('Apagar todos os dados de teste?')) { await DB.replaceAll([]); await DB.setFase(1); load(); } };
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grafo do Lina</title>
+<link rel="stylesheet" href="brand.css">
+<script src="brand.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="util.js"></script>
+<script src="db.js"></script>
+<style>
+  :root { --bg:var(--paper); --ink:var(--oxblood); --mut:var(--muted); --panel:rgba(246,241,241,.94); --line:var(--rule-strong); }
+  html, body { height:100%; overflow:hidden; background:var(--paper); }
+  svg#g { width:100vw; height:100vh; display:block; cursor:grab; }
+  .panel { position:fixed; background:var(--panel); border:1px solid var(--rule); border-radius:12px; padding:10px 14px; backdrop-filter:blur(6px); }
+  #top { top:12px; left:12px; right:12px; display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+  #top .brand-header svg { height:30px; }
+  #top .title { font-weight:500; font-size:13px; color:var(--mut); border-left:1px solid var(--rule-strong); padding-left:14px; }
+  .seg { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; background:var(--paper); border:1px solid var(--rule-strong); border-radius:10px; padding:3px; gap:3px; }
+  .seg button { font:inherit; font-size:13px; color:var(--oxblood); background:transparent; border:0; border-radius:7px; padding:6px 10px; cursor:pointer; }
+  .seg button.on { background:var(--crimson); color:var(--paper); }
+  .seg button:not(.on):hover { background:var(--blush); }
+  #busca { font:inherit; font-size:13px; padding:7px 10px; border-radius:8px; border:1px solid var(--rule-strong); background:var(--paper); color:var(--oxblood); width:180px; }
+  #stats { color:var(--mut); margin-left:auto; font-size:12.5px; }
+  #legend { bottom:12px; left:12px; max-width:min(360px,calc(100vw - 24px)); max-height:42vh; overflow:auto; }
+  #legend h2 { font-size:12px; font-weight:500; color:var(--crimson); margin:0 0 8px; }
+  #legend .it { display:flex; gap:9px; align-items:flex-start; padding:3px 0; cursor:pointer; font-size:13px; }
+  #legend .sw { width:12px; height:12px; border-radius:4px; flex:none; margin-top:3px; }
+  #legend small { color:var(--mut); }
+  #shapes { bottom:12px; right:12px; color:var(--mut); font-size:12px; }
+  #tip { position:fixed; pointer-events:none; display:none; max-width:260px; z-index:5; background:var(--paper); }
+  #tip b { display:block; font-weight:500; } #tip small { color:var(--mut); display:block; }
+  #empty { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; color:var(--mut); font-size:18px; pointer-events:none; text-align:center; padding:20px; }
+  text { font-family:var(--font); paint-order:stroke; stroke:var(--paper); stroke-width:3px; stroke-linejoin:round; fill:var(--oxblood); }
+  #legend h2 { cursor:pointer; user-select:none; display:flex; justify-content:space-between; gap:12px; }
+  #legend .key { color:var(--mut); font-size:12px; margin:0 0 8px; }
+  #legend.closed #leg, #legend.closed .key { display:none; } #legend.closed h2 { margin:0; }
+  #legend .it.on { font-weight:500; }
+  @media (max-width: 700px) {
+    #top { top:8px; left:8px; right:8px; padding:8px 10px; gap:8px; }
+    #top .brand-header svg { height:24px; }
+    #top .title { display:none; }
+    #top .seg { flex:1 1 100%; order:2; }
+    .seg button { padding:9px 4px; font-size:12.5px; min-height:40px; }
+    #busca { flex:1 1 0; width:auto; min-width:0; font-size:16px; min-height:40px; }
+    #stats { margin-left:0; font-size:11.5px; }
+    #legend { left:8px; right:8px; bottom:8px; max-width:none; max-height:45vh; padding:10px 12px; }
+    #shapes { display:none; }
+  }
+</style>
+</head>
+<body>
+<svg id="g"></svg>
+<div id="empty">Aguardando os primeiros cadastros…</div>
+<div id="top" class="panel">
+  <div class="brand-header" data-wordmark></div><span class="title">Mapa temático</span>
+  <div class="seg" id="views">
+    <button data-v="tudo" class="on">Pessoas + temas</button>
+    <button data-v="pessoas">Só pessoas</button>
+    <button data-v="temas">Só temas</button>
+  </div>
+  <input id="busca" placeholder="Buscar…">
+  <span id="stats"></span>
+</div>
+<div id="legend" class="panel"><h2><span>Eixos de pesquisa</span><span id="legToggle">▾</span></h2><div class="key">● aluno &nbsp; ◆ professor &nbsp; ■ tema &nbsp; ┄ orientação</div><div id="leg"></div></div>
+<div id="shapes" class="panel">● aluno &nbsp; ◆ professor &nbsp; ■ tema &nbsp; ┄ orientação</div>
+<div id="tip" class="panel"></div>
+
+<script>
+const COLORS = ['#9B0A0E','#1F6F8B','#D98E04','#4F7942','#6C4A8F','#C45A8A','#2A9D8F','#3B4A6B','#8C6B3F'];
+const GRAY = '#B9A9A9';
+let view = 'tudo', pessoas = [], hl = null, query = '', pinned = null;
+const pos = new Map();
+
+/* ---------- construção do grafo ---------- */
+function build(pessoas, view) {
+  const nodes = [], linkMap = new Map();
+  const addLink = (a, b, w, type) => {
+    if (a === b) return;
+    const key = a < b ? a + '|' + b : b + '|' + a;
+    const l = linkMap.get(key);
+    if (l) { l.w += w; if (type === 'orient') l.type = 'orient'; else if (type === 'colab' && l.type === 'tema') l.type = 'colab'; }
+    else linkMap.set(key, { key, source: a, target: b, w, type });
+  };
+  const byId = new Map(pessoas.map(p => [p.id, p]));
+  const profKey = new Map(pessoas.filter(p => p.papel === 'professor').map(p => [norm(p.nome), p.id]));
+  const themes = themeIndex(pessoas);
+  const pid = id => 'p:' + id;
+
+  if (view !== 'temas') {
+    pessoas.forEach(p => nodes.push({ id: pid(p.id), type: 'pessoa', prof: p.papel === 'professor', label: p.nome, p, r: p.papel === 'professor' ? 9 : 6 }));
+    pessoas.forEach(p => {
+      (p.colabs || []).forEach((cid, i) => { if (byId.has(cid)) addLink(pid(p.id), pid(cid), Math.max(1, 3 - i), 'colab'); });
+      if (p.orientador) {
+        const k = norm(p.orientador);
+        let tid = profKey.get(k);
+        if (!tid) {
+          tid = 'ghost:' + k;
+          if (!nodes.some(n => n.id === pid(tid))) nodes.push({ id: pid(tid), type: 'pessoa', prof: true, ghost: true, label: p.orientador, p: { nome: p.orientador, papel: 'professor', temas: [] }, r: 9 });
+        }
+        addLink(pid(p.id), pid(tid), 2, 'orient');
+      }
+    });
+  }
+  if (view === 'tudo') {
+    themes.forEach(t => nodes.push({ id: 't:' + t.key, type: 'tema', label: t.label, count: t.count, r: 6 + 3 * Math.sqrt(t.count) }));
+    pessoas.forEach(p => (p.temas || []).forEach(t => addLink(pid(p.id), 't:' + norm(t), 1, 'tema')));
+  } else if (view === 'pessoas') {
+    const by = new Map();
+    pessoas.forEach(p => (p.temas || []).forEach(t => { const k = norm(t); if (!by.has(k)) by.set(k, []); by.get(k).push(p.id); }));
+    by.forEach(ids => { for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) addLink(pid(ids[i]), pid(ids[j]), .5, 'tema'); });
+  } else {
+    themes.forEach(t => nodes.push({ id: 't:' + t.key, type: 'tema', label: t.label, count: t.count, r: 6 + 3 * Math.sqrt(t.count) }));
+    pessoas.forEach(p => {
+      const ks = [...new Set((p.temas || []).map(norm))];
+      for (let i = 0; i < ks.length; i++) for (let j = i + 1; j < ks.length; j++) addLink('t:' + ks[i], 't:' + ks[j], 1, 'tema');
+    });
+  }
+  return { nodes, links: [...linkMap.values()] };
+}
+
+/* ---------- Louvain (modularidade) ---------- */
+function louvain(ids, links) {
+  const n = ids.length, ix = new Map(ids.map((id, i) => [id, i]));
+  let adj = Array.from({ length: n }, () => new Map());
+  links.forEach(l => {
+    const a = ix.get(l.source), b = ix.get(l.target);
+    adj[a].set(b, (adj[a].get(b) || 0) + l.w); adj[b].set(a, (adj[b].get(a) || 0) + l.w);
+  });
+  let member = ids.map((_, i) => i);            // nó original -> nó do nível atual
+  for (let level = 0; level < 10; level++) {
+    const N = adj.length, k = adj.map(m => [...m.values()].reduce((a, b) => a + b, 0));
+    const m2 = k.reduce((a, b) => a + b, 0) || 1;
+    const comm = adj.map((_, i) => i), tot = k.slice();
+    let moved = false, pass = true;
+    while (pass) {
+      pass = false;
+      for (let i = 0; i < N; i++) {
+        const ci = comm[i], links = new Map();
+        adj[i].forEach((w, j) => { if (j !== i) links.set(comm[j], (links.get(comm[j]) || 0) + w); });
+        tot[ci] -= k[i];
+        let best = ci, bestGain = (links.get(ci) || 0) - tot[ci] * k[i] / m2;
+        links.forEach((w, c) => { const g = w - tot[c] * k[i] / m2; if (g > bestGain + 1e-12) { best = c; bestGain = g; } });
+        tot[best] += k[i];
+        if (best !== ci) { comm[i] = best; pass = moved = true; }
+      }
+    }
+    if (!moved) break;
+    const re = new Map(); comm.forEach(c => { if (!re.has(c)) re.set(c, re.size); });
+    member = member.map(i => re.get(comm[i]));
+    const next = Array.from({ length: re.size }, () => new Map());
+    adj.forEach((m, i) => m.forEach((w, j) => { const a = re.get(comm[i]), b = re.get(comm[j]); next[a].set(b, (next[a].get(b) || 0) + w); }));
+    adj = next;
+  }
+  const out = new Map(); ids.forEach((id, i) => out.set(id, member[i]));
+  return out;
+}
+
+/* ---------- desenho ---------- */
+const W = () => innerWidth, H = () => innerHeight;
+const svg = d3.select('#g');
+const root = svg.append('g');
+let userZoomed = false;
+const zoomer = d3.zoom().scaleExtent([.15, 5]).on('zoom', e => { if (e.sourceEvent) userZoomed = true; root.attr('transform', e.transform); });
+svg.call(zoomer);
+// ajusta o grafo à tela (respeitando o painel do topo e a legenda) enquanto a pessoa não mexer no zoom
+function fit() {
+  if (userZoomed || !sim.nodes().length) return;
+  const ns = sim.nodes().filter(n => isFinite(n.x));
+  if (!ns.length) return;
+  const x0 = d3.min(ns, n => n.x - 60), x1 = d3.max(ns, n => n.x + 60), y0 = d3.min(ns, n => n.y - 20), y1 = d3.max(ns, n => n.y + 30);
+  const mob = innerWidth <= 700, top = mob ? 120 : 80, bot = mob ? 70 : 20;
+  const k = Math.min(1.2, (W() - 20) / (x1 - x0), (H() - top - bot) / (y1 - y0));
+  const tx = W() / 2 - k * (x0 + x1) / 2, ty = top + (H() - top - bot) / 2 - k * (y0 + y1) / 2;
+  svg.transition().duration(500).call(zoomer.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+}
+const linkG = root.append('g'), nodeG = root.append('g');
+const sim = d3.forceSimulation()
+  .force('link', d3.forceLink().id(d => d.id).distance(l => l.type === 'tema' ? 70 : 55).strength(l => Math.min(.9, .15 + l.w * .12)))
+  .force('charge', d3.forceManyBody().strength(-380).distanceMax(500))
+  .force('x', d3.forceX(W() / 2).strength(.04)).force('y', d3.forceY(H() / 2).strength(.05))
+  .force('collide', d3.forceCollide(d => d.r + 6))
+  .on('tick', tick).on('end', fit);
+
+const sym = d => d.type === 'tema' ? d3.symbolSquare : d.prof ? d3.symbolDiamond : d3.symbolCircle;
+const area = d => d.type === 'tema' ? d.r * d.r * 3 : d.prof ? d.r * d.r * 3.4 : d.r * d.r * Math.PI;
+let nsel, lsel, adjMap = new Map();
+
+function draw() {
+  const { nodes, links } = build(pessoas, view);
+  $('#empty').style.display = nodes.length ? 'none' : 'flex';
+  nodes.forEach(n => { const o = pos.get(n.id); if (o) { n.x = o.x; n.y = o.y; } else { n.x = W() / 2 + (Math.random() - .5) * 120; n.y = H() / 2 + (Math.random() - .5) * 120; } });
+
+  // comunidades (eixos)
+  const comm = louvain(nodes.map(n => n.id), links);
+  const size = new Map(); nodes.forEach(n => size.set(comm.get(n.id), (size.get(comm.get(n.id)) || 0) + 1));
+  const order = [...size.entries()].filter(([, s]) => s >= 3).sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  const color = new Map(order.map((c, i) => [c, COLORS[i % COLORS.length]]));
+  nodes.forEach(n => { n.comm = comm.get(n.id); n.color = color.get(n.comm) || GRAY; });
+
+  // rótulo de cada eixo = temas mais frequentes entre os membros
+  const tally = new Map();
+  nodes.forEach(n => {
+    const t = tally.get(n.comm) || tally.set(n.comm, new Map()).get(n.comm);
+    if (n.type === 'tema') t.set(n.label, (t.get(n.label) || 0) + n.count);
+    else (n.p.temas || []).forEach(x => t.set(x, (t.get(x) || 0) + 1));
+  });
+  const people = c => nodes.filter(n => n.comm === c && n.type === 'pessoa' && !n.ghost).length;
+  $('#leg').innerHTML = order.slice(0, 9).map(c => {
+    const top = [...tally.get(c).entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(e => e[0]).join(' · ');
+    return `<div class="it" data-c="${c}"><span class="sw" style="background:${color.get(c)}"></span><span>${esc(top || 'sem temas ainda')} <small>${people(c) ? people(c) + ' pessoas' : ''}</small></span></div>`;
+  }).join('') || '<small>Os eixos aparecem quando houver mais respostas.</small>';
+  document.querySelectorAll('#leg .it').forEach(el => {
+    el.onclick = () => {
+      const on = pinned === el.dataset.c; pinned = on ? null : el.dataset.c;
+      hl = pinned ? (n => String(n.comm) === pinned) : null;
+      document.querySelectorAll('#leg .it').forEach(x => x.classList.toggle('on', x.dataset.c === pinned));
+      applyHl();
+    };
+  });
+
+  $('#stats').textContent = `${pessoas.length} pessoas · ${themeIndex(pessoas).size} temas · ${order.length} eixos`;
+
+  adjMap = new Map(nodes.map(n => [n.id, new Set([n.id])]));
+  links.forEach(l => { adjMap.get(l.source).add(l.target); adjMap.get(l.target).add(l.source); });
+
+  lsel = linkG.selectAll('line').data(links, d => d.key);
+  lsel.exit().remove();
+  lsel = lsel.enter().append('line').merge(lsel)
+    .attr('stroke', 'var(--mut)').attr('stroke-opacity', d => d.type === 'orient' ? .6 : d.type === 'colab' ? .75 : .3)
+    .attr('stroke-dasharray', d => d.type === 'orient' ? '3 3' : null)
+    .attr('stroke-width', d => Math.min(5, .6 + d.w * .7));
+
+  nsel = nodeG.selectAll('g.node').data(nodes, d => d.id);
+  nsel.exit().remove();
+  const en = nsel.enter().append('g').attr('class', 'node').style('cursor', 'pointer')
+    .call(d3.drag().on('start', (e, d) => { if (!e.active) sim.alphaTarget(.25).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = d.fy = null; }))
+    .on('mouseenter', (e, d) => { hl = n => adjMap.get(d.id).has(n.id); applyHl(); tip(e, d); })
+    .on('mousemove', (e, d) => tip(e, d))
+    .on('mouseleave', () => { hl = pinned ? (n => String(n.comm) === pinned) : null; applyHl(); $('#tip').style.display = 'none'; });
+  en.append('path'); en.append('text');
+  nsel = en.merge(nsel);
+  nsel.select('path').attr('d', d => d3.symbol().type(sym(d)).size(area(d))())
+    .attr('fill', d => d.ghost ? 'none' : d.color).attr('stroke', d => d.ghost ? d.color : 'var(--bg)').attr('stroke-width', d => d.ghost ? 2 : 1.5);
+  nsel.select('text').text(d => d.label).attr('text-anchor', 'middle').attr('dy', d => d.r + 12)
+    .attr('font-size', d => d.type === 'tema' ? Math.min(20, 11 + d.count * 1.2) : d.prof ? 12 : 10.5)
+    .attr('font-weight', d => d.type === 'tema' || d.prof ? 700 : 400);
+
+  const tall = H() > W() * 1.2;   // tela em pé: compacta na horizontal para o grafo crescer na vertical
+  sim.force('x', d3.forceX(W() / 2).strength(tall ? .12 : .035)).force('y', d3.forceY(H() / 2).strength(tall ? .02 : .05));
+  sim.nodes(nodes); sim.force('link').links(links);
+  sim.alpha(.6).restart();
+  applyHl();
+}
+
+function tick() {
+  lsel && lsel.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  nsel && nsel.attr('transform', d => { pos.set(d.id, { x: d.x, y: d.y }); return `translate(${d.x},${d.y})`; });
+}
+
+function applyHl() {
+  const q = norm(query);
+  const f = n => (!hl || hl(n)) && (!q || norm(n.label).includes(q) || (n.p && (n.p.temas || []).some(t => norm(t).includes(q))));
+  if (!nsel) return;
+  nsel.style('opacity', d => f(d) ? 1 : .12);
+  lsel.style('opacity', d => (f(d.source) && f(d.target)) ? 1 : .05);
+}
+
+function tip(e, d) {
+  const t = $('#tip');
+  let h;
+  if (d.type === 'tema') h = `<b>${esc(d.label)}</b><small>${d.count} ${d.count === 1 ? 'pessoa' : 'pessoas'}</small>`;
+  else {
+    const p = d.p;
+    h = `<b>${esc(p.nome)}</b><small>${p.papel === 'professor' ? 'Professor(a)' : esc(p.curso || '') + (p.orientador ? ' · orient. ' + esc(p.orientador) : '')}</small>` +
+        ((p.temas || []).length ? `<small>${esc(p.temas.join(' · '))}</small>` : '');
+  }
+  t.innerHTML = h; t.style.display = 'block';
+  t.style.left = Math.min(e.clientX + 14, innerWidth - 280) + 'px'; t.style.top = (e.clientY + 14) + 'px';
+}
+
+function $(s) { return document.querySelector(s); }
+if (innerWidth <= 700) $('#legend').classList.add('closed');
+$('#legend h2').onclick = () => $('#legend').classList.toggle('closed');
+svg.on('click', e => { if (e.target === svg.node()) { pinned = null; hl = null; $('#tip').style.display = 'none'; document.querySelectorAll('#leg .it').forEach(x => x.classList.remove('on')); applyHl(); } });
+document.querySelectorAll('#views button').forEach(b => b.onclick = () => {
+  view = b.dataset.v; pos.clear(); userZoomed = false;
+  document.querySelectorAll('#views button').forEach(x => x.classList.toggle('on', x === b));
+  draw();
+});
+$('#busca').oninput = e => { query = e.target.value; applyHl(); };
+
+addEventListener('resize', () => { pos.clear(); draw(); });
+async function load() { pessoas = await DB.listPessoas({ fallback: true }); draw(); if (DB.offline) $('#stats').textContent += ' · cópia salva (banco indisponível)'; }
+DB.onChange(load);
+load();
+</script>
+</body>
+</html>

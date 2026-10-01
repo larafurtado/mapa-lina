@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapa temático do Lina</title>
+<link rel="stylesheet" href="brand.css">
+<link rel="stylesheet" href="style.css">
+<script src="brand.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="util.js"></script>
+<script src="db.js"></script>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div class="brand-header" data-wordmark>
+      <div><p class="name">Laboratório de Modelagem<br>da Informação</p><p class="tagline">Arte · Arquitetura · Ambiente</p></div>
+    </div>
+  </div>
+  <h1>Mapa temático do laboratório</h1>
+  <p class="sub">Vamos descobrir juntos os grandes eixos de pesquisa do Lina.</p>
+
+  <!-- Etapa 1: quem é você -->
+  <section id="s1" class="card hide">
+    <h2>Etapa 1 · Quem é você?</h2>
+    <label for="nome">Nome e sobrenome</label>
+    <input id="nome" autocomplete="name" placeholder="Ex.: Maria Silva">
+    <label for="papel">Você é</label>
+    <select id="papel">
+      <option value="aluno">Aluno(a)</option>
+      <option value="professor">Professor(a)</option>
+    </select>
+    <div id="alunoCampos">
+      <label for="curso">Curso</label>
+      <select id="curso">
+        <option>Graduação</option><option>Mestrado</option><option>Doutorado</option>
+        <option>Pós-doutorado</option><option>Outro</option>
+      </select>
+      <label for="orient">Professor(a) orientador(a) <small>(comece a digitar; se não aparecer, escreva o nome)</small></label>
+      <input id="orient" list="profs" autocomplete="off">
+      <datalist id="profs"></datalist>
+    </div>
+    <button id="enviar1" class="primary">Entrar no mapa</button>
+    <div id="msg1" class="msg"></div>
+  </section>
+
+  <!-- Espera -->
+  <section id="wait" class="card hide">
+    <h2>Cadastro feito!</h2>
+    <p>Olá, <b id="meNome1"></b>. Aguarde os colegas entrarem. Quando a etapa 2 for liberada, esta tela avança sozinha.</p>
+    <div class="row"><span class="big" id="cont">0</span><span>pessoas já entraram</span></div>
+    <div class="chips" id="entraram"></div>
+    <div class="who">Não é você? <a id="naoSou1">Entrar com outro nome</a></div>
+  </section>
+
+  <!-- Etapa 2 -->
+  <section id="s2" class="hide">
+    <div class="card">
+      <h2>Etapa 2 · Seus temas de pesquisa</h2>
+      <p class="sub" style="margin-bottom:6px">Escreva livremente e tecle Enter. Sugestões aparecem a partir do que os colegas já citaram, para evitar grafias diferentes do mesmo tema.</p>
+      <input id="temaIn" placeholder="Ex.: aprendizado de máquina" autocomplete="off">
+      <div class="chips" id="sugTemas"></div>
+      <div class="chips" id="meusTemas"></div>
+    </div>
+    <div class="card">
+      <h2>Com quem você trabalha?</h2>
+      <p class="sub" style="margin-bottom:6px">Escolha na lista e ordene por prioridade: o 1º é quem você mais trabalha junto.</p>
+      <ol class="rank" id="meusColabs"></ol>
+      <input id="colabIn" placeholder="Buscar colega pelo nome" autocomplete="off">
+      <div class="list" id="listaPessoas"></div>
+    </div>
+    <button id="salvar" class="primary">Salvar minhas respostas</button>
+    <div id="msg2" class="msg"></div>
+    <div class="who">Cadastrado como <b id="meNome2"></b> · <a href="grafo.html">ver o grafo</a> · <a id="naoSou2">não sou eu</a></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const LS = 'lina_me';
+let pessoas = [], fase = 1, me = null, temas = [], colabs = [], s2init = false;
+
+async function refresh() {
+  [pessoas, fase] = await Promise.all([DB.listPessoas(), DB.getFase()]);
+  const id = localStorage.getItem(LS);
+  me = pessoas.find(p => p.id === id) || null;
+  if (!me && id) { localStorage.removeItem(LS); s2init = false; }
+  render();
+}
+
+function show(id) { ['s1', 'wait', 's2'].forEach(x => $('#' + x).classList.toggle('hide', x !== id)); }
+
+function render() {
+  if (!me) { show('s1'); fillProfs(); return; }
+  if (fase < 2) {
+    show('wait');
+    $('#meNome1').textContent = me.nome;
+    $('#cont').textContent = pessoas.length;
+    $('#entraram').innerHTML = pessoas.map(p => `<span class="chip sug">${esc(p.nome)}</span>`).join('');
+    return;
+  }
+  show('s2');
+  $('#meNome2').textContent = me.nome;
+  if (!s2init) { temas = [...(me.temas || [])]; colabs = [...(me.colabs || [])]; s2init = true; }
+  renderTemas(); renderColabs();
+}
+
+/* ---------- Etapa 1 ---------- */
+function fillProfs() {
+  $('#profs').innerHTML = pessoas.filter(p => p.papel === 'professor').map(p => `<option value="${esc(p.nome)}">`).join('');
+}
+$('#papel').onchange = () => $('#alunoCampos').classList.toggle('hide', $('#papel').value === 'professor');
+
+$('#enviar1').onclick = async () => {
+  const msg = $('#msg1'); msg.className = 'msg'; msg.textContent = '';
+  const nome = $('#nome').value.trim().replace(/\s+/g, ' ');
+  const papel = $('#papel').value;
+  if (nome.split(' ').length < 2) { msg.className = 'msg err'; msg.textContent = 'Informe nome e sobrenome.'; return; }
+  const dup = pessoas.find(p => norm(p.nome) === norm(nome));
+  if (dup) {
+    msg.className = 'msg err';
+    msg.innerHTML = `Já existe um cadastro com esse nome. <a href="#" id="souEu">Sou eu, continuar</a>`;
+    $('#souEu').onclick = e => { e.preventDefault(); localStorage.setItem(LS, dup.id); refresh(); };
+    return;
+  }
+  const orient = $('#orient').value.trim();
+  if (papel === 'aluno' && !orient) { msg.className = 'msg err'; msg.textContent = 'Informe seu(sua) orientador(a).'; return; }
+  const prof = pessoas.find(p => p.papel === 'professor' && norm(p.nome) === norm(orient));
+  $('#enviar1').disabled = true;
+  try {
+    const row = await DB.savePessoa({
+      nome, papel,
+      curso: papel === 'aluno' ? $('#curso').value : null,
+      orientador: papel === 'aluno' ? (prof ? prof.nome : orient) : null,
+      temas: [], colabs: []
+    });
+    localStorage.setItem(LS, row.id);
+    await refresh();
+  } catch (e) { msg.className = 'msg err'; msg.textContent = 'Erro ao salvar: ' + e.message; }
+  $('#enviar1').disabled = false;
+};
+$('#naoSou1').onclick = $('#naoSou2').onclick = () => { localStorage.removeItem(LS); s2init = false; me = null; render(); };
+
+/* ---------- Etapa 2: temas ---------- */
+function addTema(t) {
+  t = t.trim().replace(/\s+/g, ' ');
+  if (!t) return;
+  const idx = themeIndex(pessoas);
+  const canon = idx.get(norm(t));
+  const label = canon ? canon.label : t;
+  if (temas.some(x => norm(x) === norm(label))) return;
+  if (temas.length >= 8) { $('#msg2').className = 'msg err'; $('#msg2').textContent = 'Máximo de 8 temas.'; return; }
+  temas.push(label); $('#temaIn').value = ''; renderTemas();
+}
+$('#temaIn').onkeydown = e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTema($('#temaIn').value); } };
+$('#temaIn').oninput = renderTemas;
+
+function renderTemas() {
+  $('#meusTemas').innerHTML = temas.map((t, i) => `<span class="chip">${esc(t)}<button data-i="${i}" title="remover">✕</button></span>`).join('');
+  $('#meusTemas').querySelectorAll('button').forEach(b => b.onclick = () => { temas.splice(+b.dataset.i, 1); renderTemas(); });
+  const q = norm($('#temaIn').value);
+  const mine = new Set(temas.map(norm));
+  const sug = [...themeIndex(pessoas).values()].filter(t => !mine.has(t.key) && (!q || t.key.includes(q)))
+    .sort((a, b) => b.count - a.count).slice(0, 10);
+  $('#sugTemas').innerHTML = sug.map(t => `<span class="chip sug" data-l="${esc(t.label)}">${esc(t.label)} · ${t.count}</span>`).join('');
+  $('#sugTemas').querySelectorAll('.sug').forEach(c => c.onclick = () => addTema(c.dataset.l));
+}
+
+/* ---------- Etapa 2: colaboradores ---------- */
+function renderColabs() {
+  const byId = new Map(pessoas.map(p => [p.id, p]));
+  colabs = colabs.filter(id => byId.has(id));
+  $('#meusColabs').innerHTML = colabs.map((id, i) => `<li><span>${esc(byId.get(id).nome)}</span>
+    <button class="small" data-a="up" data-i="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+    <button class="small" data-a="dn" data-i="${i}" ${i === colabs.length - 1 ? 'disabled' : ''}>↓</button>
+    <button class="small danger" data-a="rm" data-i="${i}">✕</button></li>`).join('');
+  $('#meusColabs').querySelectorAll('button').forEach(b => b.onclick = () => {
+    const i = +b.dataset.i, a = b.dataset.a;
+    if (a === 'rm') colabs.splice(i, 1);
+    else { const j = a === 'up' ? i - 1 : i + 1; [colabs[i], colabs[j]] = [colabs[j], colabs[i]]; }
+    renderColabs();
+  });
+  const q = norm($('#colabIn').value);
+  const cand = pessoas.filter(p => p.id !== me.id && !colabs.includes(p.id) && (!q || norm(p.nome).includes(q)))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+  $('#listaPessoas').innerHTML = cand.length
+    ? cand.map(p => `<div data-id="${p.id}"><span>${esc(p.nome)}</span><small>${p.papel === 'professor' ? 'Professor(a)' : esc(p.curso || '')}</small></div>`).join('')
+    : '<div style="cursor:default;color:var(--mut)">Ninguém encontrado</div>';
+  $('#listaPessoas').querySelectorAll('[data-id]').forEach(d => d.onclick = () => { colabs.push(d.dataset.id); $('#colabIn').value = ''; renderColabs(); });
+}
+$('#colabIn').oninput = renderColabs;
+
+$('#salvar').onclick = async () => {
+  const msg = $('#msg2'); msg.className = 'msg'; msg.textContent = '';
+  if (!temas.length) { msg.className = 'msg err'; msg.textContent = 'Adicione pelo menos um tema.'; return; }
+  try {
+    await DB.savePessoa({ id: me.id, temas, colabs });
+    msg.className = 'msg ok'; msg.innerHTML = 'Salvo! Você pode voltar e editar quando quiser. <a href="grafo.html">Ver o grafo</a>';
+  } catch (e) { msg.className = 'msg err'; msg.textContent = 'Erro ao salvar: ' + e.message; }
+};
+
+DB.onChange(refresh);
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+/* Identidade visual do LINA (tokens de https://lina-ufc.github.io/lina-visual-code/). Fonte Neometric: coloque os .otf em font/ ; sem eles, usa a fonte do sistema, como o site oficial. */
+@font-face { font-family: "Neometric"; font-weight: 400; src: local("Neometric"), url("font/Neometric%20Light%20(Regular).otf") format("opentype"); font-display: swap; }
+@font-face { font-family: "Neometric"; font-weight: 500; src: local("Neometric"), url("font/Neometric%20Medium%20(Regular).otf") format("opentype"); font-display: swap; }
+@font-face { font-family: "Neometric"; font-weight: 800; src: local("Neometric"), url("font/Neometric%20Extra%20Bold%20(Bold).otf") format("opentype"); font-display: swap; }
+
+:root {
+  --crimson: #9B0A0E;
+  --oxblood: #520000;
+  --paper: #FFFFFF;
+  --blush: #F6F1F1;
+  --stage: #ECE4E4;
+  --rule: #E8DCDC;
+  --rule-strong: #D2BDBD;
+  --muted: rgba(82, 0, 0, .62);
+  --font: "Neometric", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font-family: var(--font); font-size: 14px; line-height: 1.45; color: var(--oxblood); background: var(--paper); }
+a { color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--crimson); outline-offset: 2px; }
+
+.brand-header { display: flex; align-items: center; gap: 14px; text-decoration: none; }
+.brand-header svg { height: 38px; width: auto; flex: none; }
+.brand-header .name { margin: 0; font-size: 12px; line-height: 1.3; }
+.brand-header .tagline { margin: 3px 0 0; font-size: 10.5px; letter-spacing: .06em; color: var(--crimson); }
