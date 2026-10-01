@@ -39,13 +39,9 @@
         <div class="who" id="url"></div>
       </div>
       <div style="flex:1;min-width:240px">
-        <h2>Etapa atual: <span class="pill" id="fase">1</span></h2>
-        <p class="sub"><b>Etapa 1:</b> todos digitam nome, curso e orientador.<br><b>Etapa 2:</b> temas e colaboradores (a lista de nomes já está pronta).</p>
-        <p><span class="big" id="total">0</span> pessoas cadastradas</p>
-        <div class="row">
-          <button id="b1">Voltar à etapa 1</button>
-          <button id="b2" class="primary" style="width:auto;margin:0">Liberar etapa 2</button>
-        </div>
+        <h2>Cadastros</h2>
+        <p><span class="big" id="total">0</span> pessoas no mapa</p>
+        <p class="sub">Não há etapas: cada pessoa se cadastra e já pode informar temas e colegas. O grafo se atualiza sozinho.</p>
         <p class="who"><a href="grafo.html" target="_blank">Abrir o grafo (para projetar)</a></p>
       </div>
     </div>
@@ -99,17 +95,14 @@ function startPanel() {
 }
 
 async function load() {
-  let fase;
-  [pessoas, fase] = await Promise.all([DB.listPessoas(), DB.getFase()]);
-  $('#fase').textContent = fase; $('#total').textContent = pessoas.length;
-  $('#b1').disabled = fase === 1; $('#b2').disabled = fase === 2;
-  const byId = new Map(pessoas.map(p => [p.id, p]));
+  pessoas = await DB.listPessoas();
+  $('#total').textContent = pessoas.length;
   $('#tb').innerHTML = pessoas.map(p => `<tr>
     <td>${esc(p.nome)}</td><td>${p.papel === 'professor' ? 'Professor(a)' : esc(p.curso || '')}</td><td>${esc(p.orientador || '')}</td>
-    <td>${esc((p.temas || []).join(', '))}</td><td>${(p.colabs || []).map(id => esc((byId.get(id) || {}).nome || '?')).join(', ')}</td>
+    <td>${esc((p.temas || []).join(', '))}</td><td>${esc((p.colabs || []).join(', '))}</td>
     <td><button class="small danger" data-id="${p.id}">apagar</button></td></tr>`).join('');
   $('#tb').querySelectorAll('button').forEach(b => b.onclick = async () => {
-    const p = byId.get(b.dataset.id);
+    const p = pessoas.find(x => x.id === b.dataset.id);
     if (confirm(`Apagar ${p.nome}?`)) { await DB.deletePessoa(p.id); load(); }
   });
   const cur = $('#temaSel').value;
@@ -118,8 +111,6 @@ async function load() {
   if (cur) $('#temaSel').value = cur;
 }
 
-$('#b1').onclick = async () => { await DB.setFase(1); load(); };
-$('#b2').onclick = async () => { await DB.setFase(2); load(); };
 
 $('#renomear').onclick = async () => {
   const key = $('#temaSel').value, novo = $('#temaNovo').value.trim().replace(/\s+/g, ' ');
@@ -144,10 +135,9 @@ function download(name, text, type) {
 }
 $('#json').onclick = () => download('lina-mapa.json', JSON.stringify(pessoas, null, 2), 'application/json');
 $('#csv').onclick = () => {
-  const byId = new Map(pessoas.map(p => [p.id, p]));
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const rows = [['nome', 'papel', 'curso', 'orientador', 'temas', 'colaboradores_em_ordem']].concat(pessoas.map(p =>
-    [p.nome, p.papel, p.curso, p.orientador, (p.temas || []).join('; '), (p.colabs || []).map(id => (byId.get(id) || {}).nome).filter(Boolean).join('; ')]));
+    [p.nome, p.papel, p.curso, p.orientador, (p.temas || []).join('; '), (p.colabs || []).join('; ')]));
   download('lina-mapa.csv', '﻿' + rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
 };
 
@@ -174,7 +164,7 @@ $('#seed').onclick = async () => {
   for (let i = 5; i < 50; i++) { const e = rnd(5); list.push(mk(i, false, e, list[e].nome)); }
   list.forEach(p => {
     const mesmo = list.filter(q => q.eixo === p.eixo && q.id !== p.id), outros = list.filter(q => q.eixo !== p.eixo);
-    const c = new Set(); for (let k = 0; k < 2 + rnd(3); k++) c.add(pick(Math.random() < .85 ? mesmo : outros).id);
+    const c = new Set(); for (let k = 0; k < 2 + rnd(3); k++) c.add(pick(Math.random() < .85 ? mesmo : outros).nome);
     p.colabs = [...c];
   });
   list.forEach(p => delete p.eixo);

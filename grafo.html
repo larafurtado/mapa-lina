@@ -92,17 +92,21 @@ function build(pessoas, view) {
 
   if (view !== 'temas') {
     pessoas.forEach(p => nodes.push({ id: pid(p.id), type: 'pessoa', prof: p.papel === 'professor', label: p.nome, p, r: p.papel === 'professor' ? 9 : 6 }));
+    // nomes citados (colega ou orientador) que ainda não se cadastraram viram nós vazados; ao se cadastrarem, passam a ser nós normais
+    const nameKey = new Map(pessoas.map(p => [norm(p.nome), p.id]));
+    const ghosts = new Map();
+    const refId = (nome, prof) => {
+      const k = norm(nome);
+      if (nameKey.has(k)) return pid(nameKey.get(k));
+      const gid = 'p:ghost:' + k;
+      let n = ghosts.get(gid);
+      if (!n) { n = { id: gid, type: 'pessoa', prof: !!prof, ghost: true, label: nome, p: { nome, papel: prof ? 'professor' : 'aluno', temas: [] }, r: prof ? 9 : 6 }; ghosts.set(gid, n); nodes.push(n); }
+      else if (prof && !n.prof) { n.prof = true; n.r = 9; n.p.papel = 'professor'; }
+      return gid;
+    };
     pessoas.forEach(p => {
-      (p.colabs || []).forEach((cid, i) => { if (byId.has(cid)) addLink(pid(p.id), pid(cid), Math.max(1, 3 - i), 'colab'); });
-      if (p.orientador) {
-        const k = norm(p.orientador);
-        let tid = profKey.get(k);
-        if (!tid) {
-          tid = 'ghost:' + k;
-          if (!nodes.some(n => n.id === pid(tid))) nodes.push({ id: pid(tid), type: 'pessoa', prof: true, ghost: true, label: p.orientador, p: { nome: p.orientador, papel: 'professor', temas: [] }, r: 9 });
-        }
-        addLink(pid(p.id), pid(tid), 2, 'orient');
-      }
+      (p.colabs || []).forEach((nome, i) => addLink(pid(p.id), refId(nome, false), Math.max(1, 3 - i), 'colab'));
+      if (p.orientador) addLink(pid(p.id), refId(p.orientador, true), 2, 'orient');
     });
   }
   if (view === 'tudo') {
@@ -254,7 +258,7 @@ function draw() {
   const tall = H() > W() * 1.2;   // tela em pé: compacta na horizontal para o grafo crescer na vertical
   sim.force('x', d3.forceX(W() / 2).strength(tall ? .12 : .035)).force('y', d3.forceY(H() / 2).strength(tall ? .02 : .05));
   sim.nodes(nodes); sim.force('link').links(links);
-  sim.alpha(.6).restart();
+  sim.alpha(.35).restart();
   applyHl();
 }
 
@@ -277,6 +281,7 @@ function tip(e, d) {
   if (d.type === 'tema') h = `<b>${esc(d.label)}</b><small>${d.count} ${d.count === 1 ? 'pessoa' : 'pessoas'}</small>`;
   else {
     const p = d.p;
+    if (d.ghost) { t.innerHTML = `<b>${esc(p.nome)}</b><small>citado(a), ainda não se cadastrou</small>`; t.style.display = 'block'; t.style.left = Math.min(e.clientX + 14, innerWidth - 280) + 'px'; t.style.top = (e.clientY + 14) + 'px'; return; }
     h = `<b>${esc(p.nome)}</b><small>${p.papel === 'professor' ? 'Professor(a)' : esc(p.curso || '') + (p.orientador ? ' · orient. ' + esc(p.orientador) : '')}</small>` +
         ((p.temas || []).length ? `<small>${esc(p.temas.join(' · '))}</small>` : '');
   }

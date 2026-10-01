@@ -20,13 +20,14 @@
     </div>
   </div>
   <h1>Mapa temático do laboratório</h1>
-  <p class="sub">Vamos descobrir juntos os grandes eixos de pesquisa do Lina.</p>
+  <p class="sub">Vamos descobrir juntos os grandes eixos de pesquisa do Lina. <b id="cont">0</b> <span id="contTxt">pessoas</span> no mapa.</p>
 
-  <!-- Etapa 1: quem é você -->
+  <!-- Quem é você -->
   <section id="s1" class="card hide">
-    <h2>Etapa 1 · Quem é você?</h2>
+    <h2>Quem é você?</h2>
     <label for="nome">Nome e sobrenome</label>
-    <input id="nome" autocomplete="name" placeholder="Ex.: Maria Silva">
+    <input id="nome" autocomplete="name" placeholder="Ex.: Maria Silva" list="nomesCitados">
+    <datalist id="nomesCitados"></datalist>
     <label for="papel">Você é</label>
     <select id="papel">
       <option value="aluno">Aluno(a)</option>
@@ -46,70 +47,74 @@
     <div id="msg1" class="msg"></div>
   </section>
 
-  <!-- Espera -->
-  <section id="wait" class="card hide">
-    <h2>Cadastro feito!</h2>
-    <p>Olá, <b id="meNome1"></b>. Aguarde os colegas entrarem. Quando a etapa 2 for liberada, esta tela avança sozinha.</p>
-    <div class="row"><span class="big" id="cont">0</span><span>pessoas já entraram</span></div>
-    <div class="chips" id="entraram"></div>
-    <div class="who">Não é você? <a id="naoSou1">Entrar com outro nome</a></div>
-  </section>
-
-  <!-- Etapa 2 -->
+  <!-- Depois de cadastrado: tudo salva sozinho e aparece no grafo -->
   <section id="s2" class="hide">
     <div class="card">
-      <h2>Etapa 2 · Seus temas de pesquisa</h2>
-      <p class="sub" style="margin-bottom:6px">Escreva livremente e tecle Enter. Sugestões aparecem a partir do que os colegas já citaram, para evitar grafias diferentes do mesmo tema.</p>
+      <h2>Olá, <span id="meNome"></span></h2>
+      <p class="sub" style="margin:0">Você já está no mapa. Tudo o que adicionar abaixo é salvo na hora e aparece no grafo.</p>
+      <p class="who">Seus temas e colegas podem ser editados quando quiser · <a href="grafo.html">ver o grafo</a> · <a id="naoSou">não sou eu</a></p>
+    </div>
+
+    <div class="card">
+      <h2>Seus temas de pesquisa</h2>
+      <p class="sub" style="margin-bottom:6px">Escreva livremente e tecle Enter. As sugestões vêm do que os colegas já citaram, para evitar grafias diferentes do mesmo tema.</p>
       <input id="temaIn" placeholder="Ex.: aprendizado de máquina" autocomplete="off">
       <div class="chips" id="sugTemas"></div>
       <div class="chips" id="meusTemas"></div>
     </div>
+
     <div class="card">
       <h2>Com quem você trabalha?</h2>
-      <p class="sub" style="margin-bottom:6px">Escolha na lista e ordene por prioridade: o 1º é quem você mais trabalha junto.</p>
+      <p class="sub" style="margin-bottom:6px">Escolha na lista e ordene por prioridade: o 1º é quem você mais trabalha junto. Se o colega ainda não entrou, digite o nome completo e adicione.</p>
       <ol class="rank" id="meusColabs"></ol>
-      <input id="colabIn" placeholder="Buscar colega pelo nome" autocomplete="off">
+      <input id="colabIn" placeholder="Buscar ou digitar o nome do colega" autocomplete="off">
       <div class="list" id="listaPessoas"></div>
     </div>
-    <button id="salvar" class="primary">Salvar minhas respostas</button>
-    <div id="msg2" class="msg"></div>
-    <div class="who">Cadastrado como <b id="meNome2"></b> · <a href="grafo.html">ver o grafo</a> · <a id="naoSou2">não sou eu</a></div>
+    <div id="status" class="msg"></div>
   </section>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
 const LS = 'lina_me';
-let pessoas = [], fase = 1, me = null, temas = [], colabs = [], s2init = false;
+let pessoas = [], me = null, temas = [], colabs = [], inited = false, saveT = null;
 
 async function refresh() {
-  [pessoas, fase] = await Promise.all([DB.listPessoas(), DB.getFase()]);
+  pessoas = await DB.listPessoas();
   const id = localStorage.getItem(LS);
   me = pessoas.find(p => p.id === id) || null;
-  if (!me && id) { localStorage.removeItem(LS); s2init = false; }
+  if (!me && id) { localStorage.removeItem(LS); inited = false; }
   render();
 }
 
-function show(id) { ['s1', 'wait', 's2'].forEach(x => $('#' + x).classList.toggle('hide', x !== id)); }
+// Todo nome já digitado por alguém (cadastrado ou apenas citado como colega/orientador)
+function knownNames() {
+  const m = new Map();
+  pessoas.forEach(p => m.set(norm(p.nome), { nome: p.nome, reg: true, papel: p.papel, curso: p.curso }));
+  pessoas.forEach(p => {
+    (p.colabs || []).forEach(n => { const k = norm(n); if (!m.has(k)) m.set(k, { nome: n, reg: false }); });
+    if (p.orientador) { const k = norm(p.orientador); if (!m.has(k)) m.set(k, { nome: p.orientador, reg: false, papel: 'professor' }); }
+  });
+  return m;
+}
 
 function render() {
-  if (!me) { show('s1'); fillProfs(); return; }
-  if (fase < 2) {
-    show('wait');
-    $('#meNome1').textContent = me.nome;
-    $('#cont').textContent = pessoas.length;
-    $('#entraram').innerHTML = pessoas.map(p => `<span class="chip sug">${esc(p.nome)}</span>`).join('');
-    return;
-  }
-  show('s2');
-  $('#meNome2').textContent = me.nome;
-  if (!s2init) { temas = [...(me.temas || [])]; colabs = [...(me.colabs || [])]; s2init = true; }
+  $('#cont').textContent = pessoas.length;
+  $('#contTxt').textContent = pessoas.length === 1 ? 'pessoa' : 'pessoas';
+  $('#s1').classList.toggle('hide', !!me);
+  $('#s2').classList.toggle('hide', !me);
+  if (!me) { fillAutofill(); return; }
+  $('#meNome').textContent = me.nome;
+  if (!inited) { temas = [...(me.temas || [])]; colabs = [...(me.colabs || [])]; inited = true; }
   renderTemas(); renderColabs();
 }
 
-/* ---------- Etapa 1 ---------- */
-function fillProfs() {
-  $('#profs').innerHTML = pessoas.filter(p => p.papel === 'professor').map(p => `<option value="${esc(p.nome)}">`).join('');
+/* ---------- cadastro ---------- */
+function fillAutofill() {
+  const k = [...knownNames().values()];
+  $('#profs').innerHTML = k.filter(x => x.papel === 'professor').map(x => `<option value="${esc(x.nome)}">`).join('');
+  // nomes que colegas já citaram mas que ainda não se cadastraram
+  $('#nomesCitados').innerHTML = k.filter(x => !x.reg).map(x => `<option value="${esc(x.nome)}">`).join('');
 }
 $('#papel').onchange = () => $('#alunoCampos').classList.toggle('hide', $('#papel').value === 'professor');
 
@@ -122,44 +127,56 @@ $('#enviar1').onclick = async () => {
   if (dup) {
     msg.className = 'msg err';
     msg.innerHTML = `Já existe um cadastro com esse nome. <a href="#" id="souEu">Sou eu, continuar</a>`;
-    $('#souEu').onclick = e => { e.preventDefault(); localStorage.setItem(LS, dup.id); refresh(); };
+    $('#souEu').onclick = e => { e.preventDefault(); localStorage.setItem(LS, dup.id); inited = false; refresh(); };
     return;
   }
-  const orient = $('#orient').value.trim();
+  const orient = $('#orient').value.trim().replace(/\s+/g, ' ');
   if (papel === 'aluno' && !orient) { msg.className = 'msg err'; msg.textContent = 'Informe seu(sua) orientador(a).'; return; }
-  const prof = pessoas.find(p => p.papel === 'professor' && norm(p.nome) === norm(orient));
+  const known = knownNames().get(norm(orient));
   $('#enviar1').disabled = true;
   try {
     const row = await DB.savePessoa({
       nome, papel,
       curso: papel === 'aluno' ? $('#curso').value : null,
-      orientador: papel === 'aluno' ? (prof ? prof.nome : orient) : null,
+      orientador: papel === 'aluno' ? (known ? known.nome : orient) : null,
       temas: [], colabs: []
     });
-    localStorage.setItem(LS, row.id);
+    localStorage.setItem(LS, row.id); inited = false;
     await refresh();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (e) { msg.className = 'msg err'; msg.textContent = 'Erro ao salvar: ' + e.message; }
   $('#enviar1').disabled = false;
 };
-$('#naoSou1').onclick = $('#naoSou2').onclick = () => { localStorage.removeItem(LS); s2init = false; me = null; render(); };
+$('#naoSou').onclick = () => { localStorage.removeItem(LS); inited = false; me = null; render(); };
 
-/* ---------- Etapa 2: temas ---------- */
+/* ---------- salvamento automático ---------- */
+function scheduleSave() {
+  const st = $('#status'); st.className = 'msg'; st.textContent = 'Salvando…';
+  clearTimeout(saveT);
+  saveT = setTimeout(async () => {
+    try {
+      await DB.savePessoa({ id: me.id, temas, colabs });
+      st.className = 'msg ok'; st.textContent = 'Salvo ✓ já aparece no grafo';
+    } catch (e) { st.className = 'msg err'; st.textContent = 'Não foi possível salvar: ' + e.message; }
+  }, 400);
+}
+
+/* ---------- temas ---------- */
 function addTema(t) {
   t = t.trim().replace(/\s+/g, ' ');
   if (!t) return;
-  const idx = themeIndex(pessoas);
-  const canon = idx.get(norm(t));
+  const canon = themeIndex(pessoas).get(norm(t));
   const label = canon ? canon.label : t;
-  if (temas.some(x => norm(x) === norm(label))) return;
-  if (temas.length >= 8) { $('#msg2').className = 'msg err'; $('#msg2').textContent = 'Máximo de 8 temas.'; return; }
-  temas.push(label); $('#temaIn').value = ''; renderTemas();
+  if (temas.some(x => norm(x) === norm(label))) { $('#temaIn').value = ''; return; }
+  if (temas.length >= 8) { $('#status').className = 'msg err'; $('#status').textContent = 'Máximo de 8 temas.'; return; }
+  temas.push(label); $('#temaIn').value = ''; renderTemas(); scheduleSave();
 }
 $('#temaIn').onkeydown = e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTema($('#temaIn').value); } };
 $('#temaIn').oninput = renderTemas;
 
 function renderTemas() {
   $('#meusTemas').innerHTML = temas.map((t, i) => `<span class="chip">${esc(t)}<button data-i="${i}" title="remover">✕</button></span>`).join('');
-  $('#meusTemas').querySelectorAll('button').forEach(b => b.onclick = () => { temas.splice(+b.dataset.i, 1); renderTemas(); });
+  $('#meusTemas').querySelectorAll('button').forEach(b => b.onclick = () => { temas.splice(+b.dataset.i, 1); renderTemas(); scheduleSave(); });
   const q = norm($('#temaIn').value);
   const mine = new Set(temas.map(norm));
   const sug = [...themeIndex(pessoas).values()].filter(t => !mine.has(t.key) && (!q || t.key.includes(q)))
@@ -168,11 +185,21 @@ function renderTemas() {
   $('#sugTemas').querySelectorAll('.sug').forEach(c => c.onclick = () => addTema(c.dataset.l));
 }
 
-/* ---------- Etapa 2: colaboradores ---------- */
+/* ---------- colegas ---------- */
+function addColab(nome) {
+  nome = nome.trim().replace(/\s+/g, ' ');
+  if (!nome) return;
+  const k = norm(nome), known = knownNames().get(k), st = $('#status');
+  if (k === norm(me.nome)) { st.className = 'msg err'; st.textContent = 'Você não precisa se incluir.'; return; }
+  if (colabs.some(c => norm(c) === k)) { $('#colabIn').value = ''; renderColabs(); return; }
+  if (!known && nome.split(' ').length < 2) { st.className = 'msg err'; st.textContent = 'Digite nome e sobrenome do colega.'; return; }
+  colabs.push(known ? known.nome : nome);
+  $('#colabIn').value = ''; renderColabs(); scheduleSave();
+}
+
 function renderColabs() {
-  const byId = new Map(pessoas.map(p => [p.id, p]));
-  colabs = colabs.filter(id => byId.has(id));
-  $('#meusColabs').innerHTML = colabs.map((id, i) => `<li><span>${esc(byId.get(id).nome)}</span>
+  const reg = new Set(pessoas.map(p => norm(p.nome)));
+  $('#meusColabs').innerHTML = colabs.map((n, i) => `<li><span>${esc(n)}${reg.has(norm(n)) ? '' : ' <small style="color:var(--muted)">(ainda não entrou)</small>'}</span>
     <button class="small" data-a="up" data-i="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
     <button class="small" data-a="dn" data-i="${i}" ${i === colabs.length - 1 ? 'disabled' : ''}>↓</button>
     <button class="small danger" data-a="rm" data-i="${i}">✕</button></li>`).join('');
@@ -180,25 +207,24 @@ function renderColabs() {
     const i = +b.dataset.i, a = b.dataset.a;
     if (a === 'rm') colabs.splice(i, 1);
     else { const j = a === 'up' ? i - 1 : i + 1; [colabs[i], colabs[j]] = [colabs[j], colabs[i]]; }
-    renderColabs();
+    renderColabs(); scheduleSave();
   });
-  const q = norm($('#colabIn').value);
-  const cand = pessoas.filter(p => p.id !== me.id && !colabs.includes(p.id) && (!q || norm(p.nome).includes(q)))
-    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
-  $('#listaPessoas').innerHTML = cand.length
-    ? cand.map(p => `<div data-id="${p.id}"><span>${esc(p.nome)}</span><small>${p.papel === 'professor' ? 'Professor(a)' : esc(p.curso || '')}</small></div>`).join('')
-    : '<div style="cursor:default;color:var(--mut)">Ninguém encontrado</div>';
-  $('#listaPessoas').querySelectorAll('[data-id]').forEach(d => d.onclick = () => { colabs.push(d.dataset.id); $('#colabIn').value = ''; renderColabs(); });
+  const raw = $('#colabIn').value.trim(), q = norm(raw);
+  const chosen = new Set(colabs.map(norm)), self = norm(me.nome);
+  const cand = [...knownNames().values()].filter(x => norm(x.nome) !== self && !chosen.has(norm(x.nome)) && (!q || norm(x.nome).includes(q)))
+    .sort((a, b) => (b.reg - a.reg) || a.nome.localeCompare(b.nome, 'pt'));
+  let html = cand.map(x => `<div data-n="${esc(x.nome)}"><span>${esc(x.nome)}</span><small>${x.reg ? (x.papel === 'professor' ? 'Professor(a)' : esc(x.curso || '')) : 'citado(a), ainda não entrou'}</small></div>`).join('');
+  const exact = q && (knownNames().has(q) || chosen.has(q) || q === self);
+  if (raw && !exact) html += `<div data-n="${esc(raw)}"><span>➕ Adicionar “${esc(raw)}”</span><small>ainda não entrou</small></div>`;
+  $('#listaPessoas').innerHTML = html || '<div style="cursor:default;color:var(--muted)">Ninguém na lista ainda. Digite o nome do colega.</div>';
+  $('#listaPessoas').querySelectorAll('[data-n]').forEach(d => d.onclick = () => addColab(d.dataset.n));
 }
 $('#colabIn').oninput = renderColabs;
-
-$('#salvar').onclick = async () => {
-  const msg = $('#msg2'); msg.className = 'msg'; msg.textContent = '';
-  if (!temas.length) { msg.className = 'msg err'; msg.textContent = 'Adicione pelo menos um tema.'; return; }
-  try {
-    await DB.savePessoa({ id: me.id, temas, colabs });
-    msg.className = 'msg ok'; msg.innerHTML = 'Salvo! Você pode voltar e editar quando quiser. <a href="grafo.html">Ver o grafo</a>';
-  } catch (e) { msg.className = 'msg err'; msg.textContent = 'Erro ao salvar: ' + e.message; }
+$('#colabIn').onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const raw = $('#colabIn').value.trim();
+  if (raw) addColab(raw);
 };
 
 DB.onChange(refresh);
